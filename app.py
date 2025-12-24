@@ -35,23 +35,23 @@ camera_type = st.radio(
 )
 
 # Thiết lập tham số facingMode
-# - 'user': Camera trước (Selfie/Webcam)
-# - 'environment': Camera sau (Quay cảnh vật)
+# LƯU Ý QUAN TRỌNG: Đã bỏ tham số 'exact' để tránh lỗi trên iPhone/Safari
 if camera_type == "Điện thoại (Camera Sau)":
-    video_constraints = {"facingMode": {"exact": "environment"}}
+    video_constraints = {"facingMode": "environment"}
 else:
     video_constraints = {"facingMode": "user"}
 
 # 5. Hàm xử lý từng khung hình (Core AI)
 def video_frame_callback(frame):
-    # Chuyển ảnh từ WebRTC sang định dạng OpenCV
+    # Chuyển ảnh từ WebRTC sang định dạng OpenCV (numpy array)
     img = frame.to_ndarray(format="bgr24")
 
     # --- XỬ LÝ AI ---
     # Chạy YOLO với ngưỡng tự tin 0.45
+    # verbose=False để không in log rác ra terminal
     results = model.predict(img, conf=0.45, verbose=False)
     
-    # Vẽ kết quả lên ảnh
+    # Vẽ kết quả lên ảnh (Bounding box + Label)
     annotated_frame = results[0].plot()
     # ----------------
 
@@ -60,13 +60,16 @@ def video_frame_callback(frame):
 
 # 6. Hiển thị màn hình Camera
 st.write("---")
-st.info("💡 Hướng dẫn: Bấm 'START' và chọn 'Allow' (Cho phép) để cấp quyền Camera.")
+st.info("💡 Hướng dẫn: Bấm 'START' và chọn 'Allow' (Cho phép) để cấp quyền Camera. Hãy mở bằng Chrome hoặc Safari để ổn định nhất.")
 
 webrtc_streamer(
     key="traffic-sign-app",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration=RTC_CONFIGURATION,
+    
+    # Cấu hình camera dựa trên lựa chọn của người dùng
     media_stream_constraints={"video": video_constraints, "audio": False},
+    
     video_frame_callback=video_frame_callback,
     async_processing=True,
 )
