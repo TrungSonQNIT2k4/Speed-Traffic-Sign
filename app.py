@@ -1,20 +1,19 @@
 import av
 import queue
-import threading
 import time
 import streamlit as st
+import streamlit.components.v1 as components # <--- QUAN TRỌNG: Thư viện này giúp né lỗi
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 from ultralytics import YOLO
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="Nhận diện Biển báo (Mobile Voice)", page_icon="🚦")
-st.title("🚦 AI Biển báo - Giọng nói Mobile")
+st.set_page_config(page_title="Nhận diện Biển báo", page_icon="🚦", layout="centered")
+st.title("🚦 AI Biển báo - Fix iOS")
 
-# 1. Hàng đợi (Queue) để gửi tin nhắn từ AI (Thread phụ) sang Web (Thread chính)
-# Đây là cầu nối quan trọng nhất!
+# 1. Hàng đợi gửi tin nhắn
 result_queue = queue.Queue()
 
-# 2. Cấu hình Model
+# 2. Load Model
 @st.cache_resource
 def load_model():
     return YOLO('best.pt')
@@ -30,21 +29,18 @@ CLASS_MESSAGES = {
     "khu_vuc_dong_dan_cu": "Khu vực đông dân cư",
     "het_khu_vuc_dong_dan_cu": "Hết khu vực đông dân cư",
     "cam_quay_dau": "Cấm quay đầu",
-    "cam_di_nguoc_chieu": "Nguy hiểm, đi ngược chiều",
+    "cam_di_nguoc_chieu": "Đi ngược chiều",
     "gioi_han_toc_do_50": "Tốc độ 50",
     "gioi_han_toc_do_60": "Tốc độ 60",
     "cam_vuot": "Cấm vượt",
     # Thêm các lớp khác...
 }
 
-# 4. Hàm xử lý AI (Chạy ngầm)
+# 4. Xử lý AI
 def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
-    
-    # Nhận diện
     results = model.predict(img, conf=0.5, verbose=False)
     
-    # Lấy kết quả gửi ra ngoài
     found_labels = []
     for r in results:
         for box in r.boxes:
@@ -53,10 +49,7 @@ def video_frame_callback(frame):
             if name in CLASS_MESSAGES:
                 found_labels.append(CLASS_MESSAGES[name])
     
-    # Nếu thấy biển báo, gửi vào hàng đợi (chỉ lấy cái đầu tiên để đỡ spam)
     if found_labels:
-        # Gửi tin nhắn về cho giao diện chính
-        # Dùng `put_nowait` để không làm đơ video
         try:
             result_queue.put_nowait(found_labels[0])
         except queue.Full:
@@ -67,7 +60,6 @@ def video_frame_callback(frame):
 
 # --- GIAO DIỆN CHÍNH ---
 
-# Cấu hình WebRTC (Thêm Twilio server cho mạnh)
 RTC_CONFIGURATION = RTCConfiguration(
     {"iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
@@ -75,63 +67,59 @@ RTC_CONFIGURATION = RTCConfiguration(
     ]}
 )
 
-# Chọn Camera
-camera_type = st.radio("Chọn:", ("Laptop", "Điện thoại (Cam sau)"), horizontal=True)
-constraints = {"facingMode": "environment"} if "Điện thoại" in camera_type else {"facingMode": "user"}
+camera_type = st.radio("Chọn thiết bị:", ("Laptop", "Điện thoại (Cam sau)"), horizontal=True)
+if "Điện thoại" in camera_type:
+    video_constraints = {"facingMode": "environment"}
+else:
+    video_constraints = {"facingMode": "user"}
 
-# Khởi tạo WebRTC
 ctx = webrtc_streamer(
-    key="mobile-voice",
+    key="mobile-fix-v2",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": constraints, "audio": False},
+    media_stream_constraints={"video": video_constraints, "audio": False},
     video_frame_callback=video_frame_callback,
     async_processing=True,
 )
 
-# --- PHẦN "VƯỢT QUYỀN" (JAVASCRIPT) ---
-# Logic: Tạo một vùng rỗng, liên tục kiểm tra hàng đợi, nếu có tin thì chèn JS vào.
+# --- PHẦN JS (ĐÃ SỬA ĐỂ KHÔNG BỊ LỖI TRÊN IPHONE CŨ) ---
 
-status_placeholder = st.empty() # Vùng hiển thị text
-js_placeholder = st.empty()     # Vùng chèn code JS
+status_placeholder = st.empty()
+js_placeholder = st.empty()
 
-# Nút kích hoạt âm thanh (BẮT BUỘC VỚI IPHONE/ANDROID)
-# Trình duyệt chặn tự phát tiếng nếu người dùng không bấm gì đó trước.
-if st.button("🔊 BẤM VÀO ĐÂY ĐỂ KÍCH HOẠT LOA (Quan trọng)"):
-    js_placeholder.write(
-        """<script>
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance("Đã kích hoạt giọng nói"));
-        </script>""",
-        unsafe_allow_html=True
-    )
+# Nút kích hoạt (Dùng components.html để tránh lỗi Regex)
+if st.button("🔊 KÍCH HOẠT LOA (Bấm 1 lần)"):
+    components.html("""
+    <script>
+        window.speechSynthesis.cancel(); // Dừng các âm thanh cũ
+        var msg = new SpeechSynthesisUtterance("Đã kích hoạt");
+        msg.lang = 'vi-VN';
+        window.speechSynthesis.speak(msg);
+    </script>
+    """, height=0, width=0)
 
-# Vòng lặp kiểm tra kết quả từ AI
 if ctx.state.playing:
     while True:
         try:
-            # Chờ lấy kết quả từ AI (timeout 0.1s để không đơ UI)
             text_to_speak = result_queue.get(timeout=0.1)
-            
-            # Hiển thị text lên màn hình
             status_placeholder.warning(f"⚠️ Phát hiện: {text_to_speak}")
             
-            # CHÈN JAVASCRIPT ĐỂ ĐIỆN THOẠI NÓI
-            # Đây là lệnh bắt trình duyệt đọc
-            js_code = f"""
-                <script>
-                var msg = new SpeechSynthesisUtterance("{text_to_speak}");
-                msg.lang = 'vi-VN'; // Chỉnh giọng tiếng Việt
-                msg.rate = 1.2;     // Tốc độ nói
-                window.speechSynthesis.speak(msg);
-                </script>
-            """
-            js_placeholder.write(js_code, unsafe_allow_html=True)
+            # --- ĐÂY LÀ CHỖ SỬA QUAN TRỌNG ---
+            # Dùng components.html thay vì st.write
+            # Nó giúp bypass bộ lọc MathJax gây lỗi trên iOS cũ
+            with js_placeholder:
+                components.html(f"""
+                    <script>
+                        window.speechSynthesis.cancel(); 
+                        var msg = new SpeechSynthesisUtterance("{text_to_speak}");
+                        msg.lang = 'vi-VN';
+                        msg.rate = 1.1;
+                        window.speechSynthesis.speak(msg);
+                    </script>
+                """, height=0, width=0)
             
-            # Xóa message sau 1 giây để tránh chèn code liên tục
-            time.sleep(2) 
+            time.sleep(2.5) # Đợi nói xong mới nhận tiếp
             js_placeholder.empty()
             
         except queue.Empty:
-            # Nếu không có biển báo nào thì lặp tiếp
             time.sleep(0.1)
-            continue
